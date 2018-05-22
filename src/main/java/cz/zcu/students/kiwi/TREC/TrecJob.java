@@ -1,17 +1,12 @@
 package cz.zcu.students.kiwi.TREC;
 
-import cz.zcu.kiv.nlp.ir.trec.IOUtils;
 import cz.zcu.kiv.nlp.ir.trec.SerializedDataHelper;
 import cz.zcu.kiv.nlp.ir.trec.data.Document;
-import cz.zcu.kiv.nlp.ir.trec.data.Result;
-import cz.zcu.kiv.nlp.ir.trec.data.Topic;
 import cz.zcu.students.kiwi.IrJob;
 import org.apache.log4j.*;
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
+import java.util.Collection;
 import java.util.List;
 
 public class TrecJob extends IrJob {
@@ -47,55 +42,36 @@ public class TrecJob extends IrJob {
             return false;
         }
 
-        SearchEngine index = new SearchEngine();
+        SearchEngine engine = new SearchEngine().setResultSorter((o1, o2) -> Float.compare(o2.getScore(), o1.getScore()));
 
-        List<Topic> topics = SerializedDataHelper.loadTopics(new File(settings.getOutputDir() + "/topicData.bin"));
 
-        File serializedData = new File(settings.getOutputDir() + "/czechData.bin");
-        if (!serializedData.exists()) {
-            log.error("Cannot find " + serializedData);
+        if (!loadAndIndexDocuments(settings.getInputDir() + "/czechData.bin", engine)) {
+            log.error("Failed to index documents");
             return false;
         }
 
+        ATrecSearcher searcher;
+        switch (this.settings.getMode()) {
+            case TopicFile:
+                searcher = new TrecTopicSearcher(engine, settings.getInputDir() + "/topicData.bin");
+                break;
+            default:
+                throw new UnsupportedOperationException("Search mode " + this.settings.getMode() + " not implemented");
+        }
 
-        List<Document> documents;
-        log.info("Load documents...");
-        try {
-            documents = SerializedDataHelper.loadDocuments(serializedData);
-        } catch (Exception e) {
-            log.error(e);
+
+        File outputFile = new File(settings.getResultFile(SDF.format(System.currentTimeMillis())));
+
+        try (FileOutputStream fos = new FileOutputStream(outputFile)) {
+            searcher.run(System.in, fos);
+        } catch (IOException ex) {
+            log.error(ex);
             return false;
         }
 
-        log.info("Loaded documents: " + documents.size());
-
-
-        List<String> lines = new ArrayList<>();
-
-        for (Topic t : topics) {
-            List<Result> resultHits = index.search(t.getTitle() + " " + t.getDescription());
-
-            Comparator<Result> cmp = (o1, o2) -> {
-                if (o1.getScore() > o2.getScore()) return -1;
-                if (o1.getScore() == o2.getScore()) return 0;
-                return 1;
-            };
-
-            resultHits.sort(cmp);
-            for (Result r : resultHits) {
-                final String line = r.toString(t.getId());
-                lines.add(line);
-            }
-            if (resultHits.size() == 0) {
-                lines.add(t.getId() + " Q0 " + "abc" + " " + "99" + " " + 0.0 + " runindex1");
-            }
-        }
-        final File outputFile = new File(this.settings.getOutputDir() + "/results " + SerializedDataHelper.SDF.format(System.currentTimeMillis()) + ".txt");
-        IOUtils.saveFile(outputFile, lines);
         //try to run evaluation
         try {
-            String output = runTrecEval(outputFile.toString());
-            System.out.println(output);
+            runTrecEval(outputFile.toString(), System.out);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -103,30 +79,67 @@ public class TrecJob extends IrJob {
         return true;
     }
 
-    private static String runTrecEval(String predictedFile) throws IOException {
+    private boolean loadAndIndexDocuments(String file, SearchEngine engine) {
+        Collection<Document> documents = loadDocuments(file);
+        if (documents == null) {
+            return false;
+        }
+
+        engine.addIndex(new SearchIndex(documents));
+        return true;
+    }
+
+    private Collection<Document> loadDocuments(String file) {
+
+        File serializedData = new File(file);
+        log.info("Loading  documents from " + serializedData.getAbsolutePath() + "");
+        if (!serializedData.exists()) {
+            log.error("Cannot find " + serializedData);
+            return null;
+        }
+        try {
+            List<Document> documents = SerializedDataHelper.loadList(serializedData, Document.class);
+            log.info("Loaded documents: " + documents.size());
+            return documents;
+        } catch (IOException e) {
+            log.error(e);
+            return null;
+        }
+    }
+
+
+    private static boolean runTrecEval(String predictedFile, PrintStream output) {
 
         String commandLine = "./trec_eval.8.1/./trec_eval" + " ./trec_eval.8.1/czech" + " " + predictedFile;
 
         log.info("exec(" + commandLine + ")");
-        Process process = Runtime.getRuntime().exec(commandLine);
-
-        BufferedReader stdout = new BufferedReader(new InputStreamReader(process.getInputStream()));
-        BufferedReader stderr = new BufferedReader(new InputStreamReader(process.getErrorStream()));
-
-        StringBuilder output = new StringBuilder("TREC EVAL output:\n");
-        for (String line; (line = stdout.readLine()) != null; ) output.append(line).append("\n");
-
-        int exitStatus = -42;
         try {
-            exitStatus = process.waitFor();
-        } catch (InterruptedException ie) {
-            ie.printStackTrace();
+            Process process = Runtime.getRuntime().exec(commandLine);
+
+
+            try (BufferedReader stdout = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                output.println("TREC EVAL output:");
+                String line;
+                while ((line = stdout.readLine()) != null) {
+                    output.println(line);
+                }
+
+                int exitStatus = -42;
+                try {
+                    exitStatus = process.waitFor();
+                } catch (InterruptedException ie) {
+                    ie.printStackTrace();
+                }
+                log.info("Trec eval exited with status: " + exitStatus);
+                return true;
+            } catch (IOException ex) {
+                log.warn("Trec eval process output reading failed: " + ex.toString());
+                return false;
+            }
+
+        } catch (IOException ex) {
+            log.error("Failed to start trec eval: " + ex.toString());
+            return false;
         }
-        System.out.println(exitStatus);
-
-        stdout.close();
-        stderr.close();
-
-        return output.toString();
     }
 }

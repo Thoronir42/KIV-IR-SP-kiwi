@@ -13,21 +13,22 @@ public class SerializedDataHelper {
 
     public static final java.text.DateFormat SDF = new SimpleDateFormat("yyyy-MM-dd_HH_mm_SS");
 
-    static public List<Document> loadDocuments(File serializedFile) throws IOException {
+    public static <T> List<T> loadList(File serializedFile, Class<T> tClass) throws IOException {
 
         try (ObjectInputStream objectInputStream = new ObjectInputStream(new FileInputStream(serializedFile))) {
             Object object = objectInputStream.readObject();
-            List map = (List) object;
-            if (map.isEmpty()) {
-                throw new IOException("Documents load fail: no documents found");
-            }
-            if(!(map.get(0) instanceof Document)) {
-                throw new IOException("Documents load fail: list contains non-document items");
+            List list = (List) object;
+            if (list.isEmpty()) {
+                throw new IOException("Loading list of type " + tClass.getSimpleName() + " failed: collection was empty");
             }
 
-            return (List<Document>) object;
+            if (!tClass.isInstance(list.get(0))) {
+                throw new IOException("Loading list of type " + tClass.getSimpleName() + " failed: collection contained invalid type");
+            }
+
+            return (List<T>) object;
         } catch (ClassNotFoundException ex) {
-            throw new RuntimeException(ex);
+            throw new IOException("Loading list of type " + tClass.getSimpleName() + " failed: collection contained invallid type");
         }
     }
 
