@@ -5,7 +5,10 @@ import cz.zcu.kiv.nlp.ir.trec.data.Document;
 import cz.zcu.students.kiwi.IrJob;
 import org.apache.log4j.*;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 
@@ -15,16 +18,29 @@ public class TrecJob extends IrJob {
 
     private final TrecJobSettings settings;
 
+    private TrecEvaluator evaluator;
+
+    private String runTag;
+
     public TrecJob(String... args) {
         this(new TrecJobSettings(args));
     }
 
     public TrecJob(TrecJobSettings settings) {
         this.settings = settings;
+
+        this.settings.setTrecEvalCommand("./trec_eval.8.1/trec_eval", "./trec_eval.8.1/czech");
+
+        this.evaluator = new TrecBashEvaluator(settings.getTrecCommand(), settings.getTrecRefFile());
+
+        this.runTag = SDF.format(System.currentTimeMillis());
     }
 
     @Override
     public boolean configureLogger() {
+        if (!settings.getLogToFile()) {
+            return true;
+        }
         try {
             File appenderFile = new File(this.settings.getOutputDir() + "/" + SDF.format(System.currentTimeMillis()) + " - trec job log" + ".log");
             Appender appender = new WriterAppender(new PatternLayout(), new FileOutputStream(appenderFile, false));
@@ -60,7 +76,7 @@ public class TrecJob extends IrJob {
         }
 
 
-        File outputFile = new File(settings.getResultFile(SDF.format(System.currentTimeMillis())));
+        File outputFile = new File(settings.getResultFile(runTag));
 
         try (FileOutputStream fos = new FileOutputStream(outputFile)) {
             searcher.run(System.in, fos);
@@ -69,11 +85,17 @@ public class TrecJob extends IrJob {
             return false;
         }
 
-        //try to run evaluation
-        try {
-            runTrecEval(outputFile.toString(), System.out);
-        } catch (Exception e) {
-            e.printStackTrace();
+        if (this.evaluator == null) {
+            log.info("Trec evaluation skipped");
+        } else {
+            log.info("Running trec evaluation");
+
+            String trecOutput = settings.getResultFile(runTag + "-trec");
+            if (!evaluator.runTrecEval(new File(trecOutput), outputFile.getPath())) {
+                log.warn("Trec eval failed");
+            } else {
+                log.info("Trec evaluation finished");
+            }
         }
 
         return true;
@@ -107,39 +129,4 @@ public class TrecJob extends IrJob {
         }
     }
 
-
-    private static boolean runTrecEval(String predictedFile, PrintStream output) {
-
-        String commandLine = "./trec_eval.8.1/./trec_eval" + " ./trec_eval.8.1/czech" + " " + predictedFile;
-
-        log.info("exec(" + commandLine + ")");
-        try {
-            Process process = Runtime.getRuntime().exec(commandLine);
-
-
-            try (BufferedReader stdout = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                output.println("TREC EVAL output:");
-                String line;
-                while ((line = stdout.readLine()) != null) {
-                    output.println(line);
-                }
-
-                int exitStatus = -42;
-                try {
-                    exitStatus = process.waitFor();
-                } catch (InterruptedException ie) {
-                    ie.printStackTrace();
-                }
-                log.info("Trec eval exited with status: " + exitStatus);
-                return true;
-            } catch (IOException ex) {
-                log.warn("Trec eval process output reading failed: " + ex.toString());
-                return false;
-            }
-
-        } catch (IOException ex) {
-            log.error("Failed to start trec eval: " + ex.toString());
-            return false;
-        }
-    }
 }

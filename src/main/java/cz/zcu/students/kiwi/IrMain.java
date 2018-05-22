@@ -1,6 +1,5 @@
 package cz.zcu.students.kiwi;
 
-
 import cz.zcu.students.kiwi.TREC.TrecJob;
 import org.apache.log4j.BasicConfigurator;
 import org.apache.log4j.Level;
